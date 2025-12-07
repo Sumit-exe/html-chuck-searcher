@@ -4,46 +4,61 @@ from weaviate.classes.config import Configure, Property, DataType
 
 class WeaviateHandler:
     def __init__(self, host="localhost", port=8080):
-        # Connect to local Weaviate instance
         self.client = weaviate.connect_to_local(host=host, port=port)
         self.collection_name = "Documents"
         self._ensure_collection()
 
     def _ensure_collection(self):
-        """Create collection if it doesn't exist"""
         collections = self.client.collections.list_all()
         if self.collection_name not in collections:
             print("Creating Weaviate collection...")
             self.client.collections.create(
                 name=self.collection_name,
-                properties=[Property(name="text", data_type=DataType.TEXT)],
+                properties=[
+                    Property(name="html", data_type=DataType.TEXT),
+                    Property(name="text", data_type=DataType.TEXT),
+                    Property(name="summary", data_type=DataType.TEXT)
+                ],
                 vectorizer_config=Configure.Vectorizer.none()
             )
+            
+    def reset_collection(self):
+        collections = self.client.collections.list_all()
+        if self.collection_name in collections:
+            self.client.collections.delete(self.collection_name)
 
-    def add_document(self, text: str, embedding):
-        """Insert a document with vector (convert numpy array to list if needed)"""
-        if hasattr(embedding, "tolist"):
-            embedding = embedding.tolist()
+        self._ensure_collection()
 
+    def add_document(self, html: str, text: str, summary: str, embedding):
         collection = self.client.collections.get(self.collection_name)
         collection.data.insert(
-            properties={"text": text},
+            properties={
+                "html": html,
+                "text": text,
+                "summary": summary
+            },
             vector=embedding
         )
-
     def search(self, query_embedding: list, limit: int = 10):
         collection = self.client.collections.get(self.collection_name)
+
         results = collection.query.near_vector(
             near_vector=query_embedding,
-            limit=limit
+            limit=limit,
+            return_properties=["html", "text", "summary"],
+            return_metadata=["score"]     # <-- IMPORTANT
         )
 
-        seen = set()
-        unique_results = []
+        final = []
         for item in results.objects:
-            text = item.properties["text"]
-            if text not in seen:
-                unique_results.append(text)
-                seen.add(text)
-        return unique_results[:limit]
+            score = item.metadata.score      # <-- FIXED (always present)
+            relevance = round(score * 100, 2)
 
+            final.append({
+                "html": item.properties["html"],
+                "text": item.properties["text"],
+                "summary": item.properties["summary"],
+                "relevance": relevance
+            })
+
+        return final
